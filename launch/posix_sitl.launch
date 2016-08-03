@@ -7,8 +7,8 @@
     <arg name="world" default="iris"/>
     <arg name="build" default="posix_sitl_default"/>
 
-    <node pkg="px4" type="sitl_run.sh" name="simulator" args="posix-configs/SITL/init/rcS none gazebo $(arg world) $(find px4)/build_$(arg build)">
-        <env name="no_sim" value="1" />
+    <node name="sitl" pkg="px4" type="px4" output="screen"
+        args="$(find px4) $(find px4)/posix-configs/SITL/init/rcS_gazebo_iris">
     </node>
 
     <include file="$(find gazebo_ros)/launch/empty_world.launch">
@@ -17,3 +17,5 @@
         <arg name="world_name" value="$(find px4)/Tools/sitl_gazebo/worlds/$(arg world).world" />
     </include>
 </launch>
+
+<!-- vim: set et ft=xml fenc=utf-8 ff=unix sts=0 sw=4 ts=4 : -->

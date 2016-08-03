@@ -50,6 +50,7 @@
 #include "px4_middleware.h"
 #include "DriverFramework.hpp"
 #include <termios.h>
+#include <sys/stat.h>
 
 namespace px4
 {
@@ -83,6 +84,97 @@ extern "C" {
 		PX4_BACKTRACE();
 		cout.flush();
 	}
+}
+
+static inline bool fileExists(const std::string &name)
+{
+	struct stat buffer;
+	return (stat(name.c_str(), &buffer) == 0);
+}
+
+static inline bool dirExists(const std::string &path)
+{
+	struct stat info;
+
+	if (stat(path.c_str(), &info) != 0) {
+		return false;
+
+	} else if (info.st_mode & S_IFDIR) {
+		return true;
+
+	} else {
+		return false;
+	}
+}
+
+static inline void touch(const std::string &name)
+{
+	fstream fs;
+	fs.open(name, ios::out);
+	fs.close();
+}
+
+static int mkpath(const char *path, mode_t mode);
+
+static int do_mkdir(const char *path, mode_t mode)
+{
+	struct stat             st;
+	int             status = 0;
+
+	if (stat(path, &st) != 0) {
+		/* Directory does not exist. EEXIST for race condition */
+		if (mkdir(path, mode) != 0 && errno != EEXIST) {
+			status = -1;
+		}
+
+	} else if (!S_ISDIR(st.st_mode)) {
+		errno = ENOTDIR;
+		status = -1;
+	}
+
+	return (status);
+}
+
+/**
+** mkpath - ensure all directories in path exist
+** Algorithm takes the pessimistic view and works top-down to ensure
+** each directory in path exists, rather than optimistically creating
+** the last element and working backwards.
+*/
+static int mkpath(const char *path, mode_t mode)
+{
+	char           *pp;
+	char           *sp;
+	int             status;
+	char           *copypath = strdup(path);
+
+	status = 0;
+	pp = copypath;
+
+	while (status == 0 && (sp = strchr(pp, '/')) != 0) {
+		if (sp != pp) {
+			/* Neither root nor double slash in path */
+			*sp = '\0';
+			status = do_mkdir(copypath, mode);
+			*sp = '/';
+		}
+
+		pp = sp + 1;
+	}
+
+	if (status == 0) {
+		status = do_mkdir(path, mode);
+	}
+
+	free(copypath);
+	return (status);
+}
+
+static std::string pwd()
+{
+	static const size_t max_path_len = 100;
+	char temp[max_path_len];
+	return (getcwd(temp, max_path_len) ? std::string(temp) : std::string(""));
 }
 
 static void print_prompt()
@@ -138,6 +230,7 @@ static void usage()
 	cout << "   -d            - Optional flag to run the app in daemon mode and does not listen for user input." <<
 	     std::endl;
 	cout << "                   This is needed if px4 is intended to be run as a upstart job on linux" << std::endl;
+	cout << "<data_directory> - directory where romfs and posix-configs are located" << std::endl;
 	cout << "<startup_config> - config file for starting/stopping px4 modules" << std::endl;
 	cout << "   -h            - help/usage information" << std::endl;
 }
@@ -202,52 +295,112 @@ int main(int argc, char **argv)
 	set_cpu_scaling();
 
 	int index = 1;
-	char *commands_file = nullptr;
+	string  commands_file = "";
+	int positional_arg_count = 0;
+	string data_path = "";
+	string node_name = "";
 
+	// parse arguments
 	while (index < argc) {
+		cout << "arg: " << index << " : " << argv[index] << endl;
+
 		if (argv[index][0] == '-') {
 			// the arg starts with -
-			if (strcmp(argv[index], "-d") == 0) {
+			if (strncmp(argv[index], "-d", 2) == 0) {
 				daemon_mode = true;
 
-			} else if (strcmp(argv[index], "-h") == 0) {
+			} else if (strncmp(argv[index], "-h", 2) == 0) {
 				usage();
 				return 0;
 
-			} else if (strcmp(argv[index], "-c") == 0) {
+			} else if (strncmp(argv[index], "-c", 2) == 0) {
 				chroot_on = true;
 
 			} else {
 				PX4_WARN("Unknown/unhandled parameter: %s", argv[index]);
 				return 1;
 			}
+		} else if (!strncmp(argv[index], "__name:=", 8)) {
+			string name_arg = argv[index];
+			node_name = name_arg.substr(8);
+			cout << "node name: " << node_name << endl;
 
 		} else {
-			// this is an argument that does not have '-' prefix; treat it like a file name
-			ifstream infile(argv[index]);
+			positional_arg_count += 1;
 
-			if (infile.good()) {
-				infile.close();
+			if (positional_arg_count == 1) {
+				data_path = argv[index];
+				cout << "data path: " << data_path << endl;
+
+			} else if (positional_arg_count == 2) {
 				commands_file = argv[index];
-
-			} else {
-				PX4_WARN("Error opening file: %s", argv[index]);
-				return -1;
+				cout << "commands file: " << commands_file << endl;
 			}
 		}
 
 		++index;
 	}
 
+	if (positional_arg_count != 2) {
+		PX4_WARN("Error expected 2 position arguments, got %d", positional_arg_count);
+		usage();
+		return -1;
+	}
 
+	if (commands_file.size() < 1) {
+		PX4_WARN("Error commands file not specified");
+		return -1;
+	}
+
+	if (!fileExists(commands_file)) {
+		PX4_WARN("Error opening commands file, does not exist: %s", commands_file.c_str());
+		return -1;
+	}
+
+	// create sym-links
+	std::vector<std::string> path_sym_links = { "ROMFS", "posix-configs"};
+
+	for (int i = 0; i < path_sym_links.size(); i++) {
+		std::string path_sym_link = path_sym_links[i];
+
+		if (dirExists(path_sym_link)) { break; }
+
+		std::string src_path = data_path + "/" + path_sym_link;
+		std::string dest_path =  pwd() + "/" +  path_sym_link;
+		// create sym-links
+		int ret = symlink(src_path.c_str(), dest_path.c_str());
+
+		if (ret != 0) {
+			PX4_WARN("Error creating symlink %s -> %s", src_path, dest_path);
+			return ret;
+		}
+	}
+
+	// setup rootfs
+	const std::string eeprom_path = "./rootfs/eeprom/";
+	const std::string microsd_path = "./rootfs/fs/microsd/";
+
+	if (!fileExists(eeprom_path + "parameters")) {
+		std::cout << "creating new parameters file" << std::endl;
+		mkpath(eeprom_path.c_str(), S_IRUSR | S_IWUSR | S_IXUSR);
+		touch(eeprom_path + "parameters");
+	}
+
+	if (!fileExists(microsd_path + "dataman")) {
+		std::cout << "creating new dataman file" << std::endl;
+		mkpath(microsd_path.c_str(), S_IRUSR | S_IWUSR | S_IXUSR);
+		touch(microsd_path + "dataman");
+	}
+
+	// initialize
 	DriverFramework::Framework::initialize();
 	px4::init_once();
 
 	px4::init(argc, argv, "px4");
 
 	// if commandfile is present, process the commands from the file
-	if (commands_file != nullptr) {
-		ifstream infile(commands_file);
+	if (commands_file.size() != 0) {
+		ifstream infile(commands_file.c_str());
 
 		if (infile.is_open()) {
 			for (string line; getline(infile, line, '\n');) {
@@ -261,7 +414,7 @@ int main(int argc, char **argv)
 			}
 
 		} else {
-			PX4_WARN("Error opening file: %s", commands_file);
+			PX4_WARN("Error opening commands file: %s", commands_file.c_str());
 		}
 	}
 
@@ -419,3 +572,5 @@ int main(int argc, char **argv)
 
 	return OK;
 }
+
+/* vim: set noet fenc=utf-8 ff=unix sts=0 sw=4 ts=4 : */
