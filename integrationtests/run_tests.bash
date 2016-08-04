@@ -5,15 +5,13 @@
 # License: according to LICENSE.md in the root directory of the PX4 Firmware repository
 set -e
 
-if [ "$#" -lt 1 ]
-then
-	echo usage: run_tests.bash firmware_src_dir build_dir
-	echo ""
-	exit 1
-fi
+pushd `dirname $0` > /dev/null
+SCRIPTPATH=`pwd`
+popd > /dev/null
 
-SRC_DIR=`realpath $1`
-JOB_DIR=`realpath $SRC_DIR/..`
+SRC_DIR=`realpath ${SCRIPTPATH}/..`
+
+JOB_DIR=$SRC_DIR/..
 BUILD=posix_sitl_default
 # TODO
 ROS_TEST_RESULT_DIR=/root/.ros/test_results/px4
@@ -35,6 +33,15 @@ else
 	echo "could not find /opt/ros/{ros-distro}/setup.bash"
 	exit 1
 fi
+
+# setup Gazebo env and update package path
+export GAZEBO_RESOURCE_PATH=${GAZEBO_RESOURCE_PATH}:${SRC_DIR}/Tools/sitl_gazebo
+export GAZEBO_MODEL_PATH=${GAZEBO_MODEL_PATH}:${SRC_DIR}/Tools/sitl_gazebo/models
+export GAZEBO_PLUGIN_PATH=${BINARY_DIR}/sitl_gazebo:${GAZEBO_PLUGIN_PATH}
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:${SRC_DIR}/Tools/sitl_gazebo/Build/msgs/
+export ROS_PACKAGE_PATH=${ROS_PACKAGE_PATH}:${SRC_DIR}
+export GAZEBO_MODEL_DATABASE_URI=""
+export SITL_GAZEBO_PATH=$SRC_DIR/Tools/sitl_gazebo
 source $SRC_DIR/integrationtests/setup_gazebo_ros.bash $SRC_DIR
 
 echo "deleting previous test results ($TEST_RESULT_TARGET_DIR)"
@@ -42,18 +49,12 @@ if [ -d ${TEST_RESULT_TARGET_DIR} ]; then
 	rm -r ${TEST_RESULT_TARGET_DIR}
 fi
 
-# FIXME: Firmware compilation seems to CD into this directory (/root/Firmware)
-# when run from "run_container.bash". Why?
-if [ -d /root/Firmware ]; then
-	rm /root/Firmware
-fi
-ln -s ${SRC_DIR} /root/Firmware
-
-echo "=====> compile ($SRC_DIR)"
-cd $SRC_DIR
-make ${BUILD}
-make --no-print-directory gazebo_build
-echo "<====="
+cd /tmp
+mkdir -p /tmp/catkin/src
+cd /tmp/catkin/src
+ln -s $SRC_DIR px4
+cd /tmp/catkin
+catkin_make
 
 # don't exit on error anymore from here on (because single tests or exports might fail)
 set +e

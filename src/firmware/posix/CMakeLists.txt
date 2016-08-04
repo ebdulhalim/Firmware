@@ -135,7 +135,8 @@ if (GAZEBO_FOUND)
 	ExternalProject_Add(sitl_gazebo
 		SOURCE_DIR ${PX4_SOURCE_DIR}/Tools/sitl_gazebo
 		CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
-		BINARY_DIR ${PX4_BINARY_DIR}
+		BINARY_DIR ${PX4_BINARY_DIR}/build_gazebo
+		INSTALL_COMMAND ""
 		)
 	list(APPEND viewers gazebo)
 endif()
@@ -163,7 +164,6 @@ foreach(viewer ${viewers})
 				WORKING_DIRECTORY ${PX4_SOURCE_DIR}
 				USES_TERMINAL
 				)
-			add_dependencies(${_targ_name} px4 dev_install)
 			if (viewer STREQUAL "gazebo")
 				add_dependencies(${_targ_name} sitl_gazebo)
 			endif()
@@ -175,10 +175,6 @@ endforeach()
 # install
 #
 
-add_custom_target(dev_install
-	COMMAND "${CMAKE_COMMAND}" --build ${PX4_BINARY_DIR} --target install
-	DEPENDS px4)
-
 install(TARGETS px4 DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/ROMFS DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME})
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/posix-configs DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME})
@@ -187,13 +183,11 @@ install(DIRECTORY ${PROJECT_SOURCE_DIR}/posix-configs DESTINATION ${CMAKE_INSTAL
 # tests
 #
 
-add_test(test_install "${CMAKE_COMMAND}" --build ${PX4_BINARY_DIR} --target install)
 add_test(NAME rcS_tests
 	COMMAND ${PX4_SOURCE_DIR}/Tools/sitl_run.sh
 		posix-configs/SITL/init/rcS_tests none none none ${CMAKE_INSTALL_PREFIX}
 		WORKING_DIRECTORY ${PX4_SOURCE_DIR})
 set_tests_properties(rcS_tests PROPERTIES
-	PASS_REGULAR_EXPRESSION "All tests passed"
-	DEPENDS test_install)
+	PASS_REGULAR_EXPRESSION "All tests passed")
 
 # vim: set noet ft=cmake fenc=utf-8 ff=unix :
